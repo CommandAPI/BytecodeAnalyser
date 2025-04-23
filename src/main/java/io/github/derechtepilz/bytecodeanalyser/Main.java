@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
 public class Main {
 
     private final Pattern versionFolderPattern = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)");
-    private final Pattern commandAPIJarNamePattern = Pattern.compile("CommandAPI-(\\d+)\\.(\\d+)\\.(\\d+)(-SNAPSHOT)?_(\\d{1,2})_(\\w{3})_(\\d{4})_\\((\\d{2}-\\d{2}-\\d{2}(am|pm))\\)\\.jar");
+    private final Pattern commandAPIJarNamePattern = Pattern.compile("CommandAPI-(\\d+)\\.(\\d+)\\.(\\d+)(-SNAPSHOT)?_(\\d{1,2})_(\\w{3})_(\\d{4})_\\((\\d{2}-\\d{2}-\\d{2}(am|pm|AM|PM))\\)\\.jar");
 
     private final List<BytecodeFile> bytecodes = new ArrayList<>();
 
