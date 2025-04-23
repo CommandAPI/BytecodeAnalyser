@@ -2,14 +2,20 @@ package io.github.derechtepilz.bytecodeanalyser;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class Main {
 
@@ -24,6 +30,7 @@ public class Main {
     public static void main(String[] args) throws IOException, InterruptedException {
         Main main = new Main();
         List<String> versions = main.collectFolders();
+        Collections.sort(versions);
         System.out.println(versions);
         main.clean(versions);
         main.unzipMatchingJar(versions);
@@ -35,22 +42,23 @@ public class Main {
             main.compareAllBytecodes(classNames);
         } catch (DiffException e) {
             if (e.methodKnown) {
-                System.out.println("There is a mappings issue with " + e.getMessage());
+                System.out.println("There is a mappings issue with " + e.getMessage().trim());
                 for (BytecodeFile file : main.bytecodes) {
                     if (!file.getClassName().equals(e.className)) {
                         continue;
                     }
                     System.out.println("Bytecode " + file.getVersion() + ":");
-                    System.out.println(e.getMessage());
-                    System.out.println(file.methodImpls().keySet());
+                    System.out.println(e.getMessage().trim());
                     file.methodImpls().get(e.getMessage()).forEach(impl -> {
-                        System.out.println("\t" + impl);
+                        System.out.println("\t" + impl.trim());
                     });
                     System.out.println();
                 }
             } else {
                 System.out.println(e.getMessage());
             }
+            // We caught an exception, but we want the CommandAPI's GitHub Action build to fail
+            System.exit(1);
         }
     }
 
@@ -116,14 +124,29 @@ public class Main {
 
     public void unzipMatchingJar(List<String> versions) throws IOException, InterruptedException {
         for (String version : versions) {
-            Runtime runtime = Runtime.getRuntime();
             String fileName;
             if ((fileName = getMatchingFileName(version)) == null) {
                 continue;
             }
             System.out.println("Unzipping " + version + "/" + fileName);
-            Process process = runtime.exec(new String[]{"tar", "-xf", fileName}, null, new File(version));
-            process.waitFor();
+            File versionFolder = new File(version);
+            try (ZipInputStream inputStream = new ZipInputStream(new FileInputStream(version + "/" + fileName))) {
+                ZipEntry entry;
+                while ((entry = inputStream.getNextEntry()) != null) {
+                    File file = new File(versionFolder, entry.getName());
+
+                    if (entry.isDirectory()) {
+                        file.mkdirs();
+                        continue;
+                    } else {
+                        file.getParentFile().mkdirs();
+                    }
+
+                    try (FileOutputStream outputStream = new FileOutputStream(file)) {
+                        inputStream.transferTo(outputStream);
+                    }
+                }
+            }
         }
     }
 
