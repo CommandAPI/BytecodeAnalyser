@@ -5,34 +5,39 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class BytecodeFile {
 
-    private static final List<String> DIFF = new ArrayList<>();
+    private static final Map<String, List<String>> DIFF = new HashMap<>();
 
     private final String version;
+    private final String className;
+    private final File bytecodeFile;
+    private final Pattern finder = Pattern.compile("// [A-Za-z]+");
     private final List<String> methods = new ArrayList<>();
     private final Map<String, List<String>> methodImpls = new HashMap<>();
 
-    public BytecodeFile(String version, File bytecodeFile) {
+    public BytecodeFile(String version, String className, File bytecodeFile, File methodFile) {
         this.version = version;
-        List<String> preprocessedLines = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(bytecodeFile))) {
+        this.className = className;
+        this.bytecodeFile = bytecodeFile;
+        try (BufferedReader reader = new BufferedReader(new FileReader(methodFile))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                preprocessedLines.add(!(line.length() < 3) ? line.substring(2) : line);
+                if (line.startsWith("  ")) {
+                    methods.add(line);
+                }
             }
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        readMethods(preprocessedLines);
-        Collections.sort(methods);
+        readMethodImpls();
     }
 
     @Override
@@ -53,6 +58,10 @@ public class BytecodeFile {
         return version;
     }
 
+    public String getClassName() {
+        return className;
+    }
+
     public List<String> methods() {
         return methods;
     }
@@ -62,7 +71,7 @@ public class BytecodeFile {
     }
 
     public void writeAndDiff() throws DiffException {
-        if (DIFF.isEmpty()) {
+        if (DIFF.get(className) == null) {
             writeInitialBytecodeFile();
             return;
         }
@@ -70,29 +79,31 @@ public class BytecodeFile {
     }
 
     private void writeInitialBytecodeFile() {
+        List<String> methodImplementation = new ArrayList<>();
         for (String methodSignature : methods) {
-            DIFF.add(methodSignature);
-            DIFF.addAll(methodImpls.get(methodSignature));
+            methodImplementation.add(methodSignature);
+            methodImplementation.addAll(methodImpls.get(methodSignature));
         }
+        DIFF.put(className, methodImplementation);
     }
 
     private void compareAndWriteIfEqual() throws DiffException {
         List<String> methodsDiff = collectToComparable();
         for (int i = 0; i < methodsDiff.size(); i++) {
-            if (!methodsDiff.get(i).equals(DIFF.get(i))) {
+            if (!methodsDiff.get(i).equals(DIFF.get(className).get(i))) {
                 if (methods.contains(methodsDiff.get(i))) {
                     // We've just compared a method that doesn't match
-                    throw new DiffException(methodsDiff.get(i));
+                    throw new DiffException(className, methodsDiff.get(i));
                 }
                 // We didn't compare a method, but we want to know the method to be able to
                 // know which method to implement version-specific
                 for (Map.Entry<String, List<String>> entry : methodImpls.entrySet()) {
                     if (entry.getValue().contains(methodsDiff.get(i))) {
-                        throw new DiffException(entry.getKey());
+                        throw new DiffException(className, entry.getKey());
                     }
                 }
             }
-            DIFF.set(i, methodsDiff.get(i));
+            DIFF.get(className).set(i, methodsDiff.get(i));
         }
     }
 
@@ -105,64 +116,43 @@ public class BytecodeFile {
         return methods;
     }
 
-    private void readMethods(List<String> rawBytecode) {
-        Iterator<String> iterator = rawBytecode.iterator();
-        while (iterator.hasNext()) {
-            String line = iterator.next();
-            if (line.startsWith("protected abstract")) {
-                methods.add(line);
-                methodImpls.put(line, new ArrayList<>());
+    private void readMethodImpls() {
+        List<String> bytecodeLines = new ArrayList<>();
+        try {
+            String line;
+            BufferedReader reader = new BufferedReader(new FileReader(bytecodeFile));
+            while ((line = reader.readLine()) != null) {
+                bytecodeLines.add(line);
             }
-            if (!line.startsWith("public final")) {
-                while (iterator.hasNext() && !(line = iterator.next()).startsWith("public final")) {
-                }
-            }
-            if (line.startsWith("public final")) {
-                methods.add(line);
-                readMethodImpl(line, iterator);
-            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        for (String method : methods) {
+            readMethod(method, bytecodeLines);
         }
     }
 
-    private void readMethodImpl(String currentMethod, Iterator<String> bytecodeIterator) {
-        String line;
-        while (bytecodeIterator.hasNext() && !(line = bytecodeIterator.next()).contains("areturn") && !line.contains("freturn")) {
-            if (!line.contains("net/minecraft/")) {
-                continue;
+    private void readMethod(String name, List<String> bytecodeContents) {
+        int methodIndex = bytecodeContents.indexOf(name);
+        for (int i = methodIndex + 1; i < bytecodeContents.size(); i++) {
+            if (methods.contains(bytecodeContents.get(i))) {
+                break;
             }
-            if (line.contains("// Method")) {
-                String minecraftCode = line.split("// Method")[1].trim();
-                List<String> methods = methodImpls.getOrDefault(currentMethod, new ArrayList<>());
-                methods.add(minecraftCode);
-                methodImpls.put(currentMethod, methods);
-                continue;
+            Matcher matcher = finder.matcher(bytecodeContents.get(i));
+            if (matcher.find()) {
+                String potentialMapping = bytecodeContents.get(i).split(matcher.group())[1].trim();
+                if (!potentialMapping.contains("net/minecraft/")) {
+                    continue;
+                }
+                // Minecraft mapping found
+                List<String> methods = methodImpls.getOrDefault(name, new ArrayList<>());
+                methods.add(potentialMapping);
+                methodImpls.put(name, methods);
             }
-            if (line.contains("// InterfaceMethod")) {
-                String minecraftCode = line.split("// InterfaceMethod")[1].trim();
-                List<String> methods = methodImpls.getOrDefault(currentMethod, new ArrayList<>());
-                methods.add(minecraftCode);
-                methodImpls.put(currentMethod, methods);
-                continue;
-            }
-            if (line.contains("// class")) {
-                String minecraftCode = line.split("// class")[1].trim();
-                List<String> methods = methodImpls.getOrDefault(currentMethod, new ArrayList<>());
-                methods.add(minecraftCode);
-                methodImpls.put(currentMethod, methods);
-                continue;
-            }
-            if (line.contains("// Field")) {
-                String minecraftCode = line.split("// Field")[1].trim();
-                List<String> methods = methodImpls.getOrDefault(currentMethod, new ArrayList<>());
-                methods.add(minecraftCode);
-                methodImpls.put(currentMethod, methods);
-                continue;
-            }
-            System.out.println("[WARNING] This line in " + version  + " contains Minecraft mappings but wasn't processed!");
-            System.out.println("\t" + line);
         }
-        if (!methodImpls.containsKey(currentMethod)) {
-            methodImpls.put(currentMethod, new ArrayList<>());
+        if (!methodImpls.containsKey(name)) {
+            methodImpls.put(name, new ArrayList<>());
         }
     }
 

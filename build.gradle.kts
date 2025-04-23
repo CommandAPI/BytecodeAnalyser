@@ -20,6 +20,6 @@ tasks.test {
 
 tasks.jar {
 	manifest {
-		attributes["Main-Class"] = "io.github.derechtepilz.Main"
+		attributes["Main-Class"] = "io.github.derechtepilz.bytecodeanalyser.Main"
 	}
 }

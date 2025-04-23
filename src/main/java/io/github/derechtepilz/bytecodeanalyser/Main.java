@@ -8,13 +8,18 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiFunction;
 import java.util.regex.Pattern;
 
 public class Main {
 
-    private final Pattern pattern = Pattern.compile("CommandAPI-(\\d+)\\.(\\d+)\\.(\\d+)(-SNAPSHOT)?_(\\d{1,2})_(\\w{3})_(\\d{4})_\\((\\d{2}-\\d{2}-\\d{2}(am|pm))\\)\\.jar");
+    private final Pattern versionFolderPattern = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)");
+    private final Pattern commandAPIJarNamePattern = Pattern.compile("CommandAPI-(\\d+)\\.(\\d+)\\.(\\d+)(-SNAPSHOT)?_(\\d{1,2})_(\\w{3})_(\\d{4})_\\((\\d{2}-\\d{2}-\\d{2}(am|pm))\\)\\.jar");
 
     private final List<BytecodeFile> bytecodes = new ArrayList<>();
+
+    private final BiFunction<String, String, String> getDisassembledBytecodeFileName = (version, className) -> "bytecode_" + version + "_" + className + ".txt";
+    private final BiFunction<String, String, String> getMethodBytecodeFileName = (version, className) -> "bytecode_" + version + "_" + className + "_methods.txt";
 
     public static void main(String[] args) throws IOException, InterruptedException {
         Main main = new Main();
@@ -22,16 +27,22 @@ public class Main {
         System.out.println(versions);
         main.clean(versions);
         main.unzipMatchingJar(versions);
-        main.createBytecodeFile(versions);
-        main.loadBytecodeFile(versions);
+        List<String> classNames = main.collectClassNames();
+        System.out.println(classNames);
+        main.createBytecodeFiles(versions, classNames);
+        main.loadBytecodeFile(versions, classNames);
         try {
-            main.compareAllBytecodes();
+            main.compareAllBytecodes(classNames);
         } catch (DiffException e) {
             if (e.methodKnown) {
                 System.out.println("There is a mappings issue with " + e.getMessage());
                 for (BytecodeFile file : main.bytecodes) {
+                    if (!file.getClassName().equals(e.className)) {
+                        continue;
+                    }
                     System.out.println("Bytecode " + file.getVersion() + ":");
                     System.out.println(e.getMessage());
+                    System.out.println(file.methodImpls().keySet());
                     file.methodImpls().get(e.getMessage()).forEach(impl -> {
                         System.out.println("\t" + impl);
                     });
@@ -51,22 +62,49 @@ public class Main {
             return folders;
         }
         for (File file : files) {
-            if (file.isDirectory()) {
+            if (file.isDirectory() && versionFolderPattern.matcher(file.getName()).matches()) {
                 folders.add(file.getName());
             }
         }
         return folders;
     }
 
+    public List<String> collectClassNames() {
+        List<String> classNames = new ArrayList<>();
+        // Do the work based on the first matching folder, we compile only one class several
+        // times so the amount of emitted classes should be the same
+        File[] files = new File(".").listFiles();
+        File workingDir = null;
+        if (files == null) {
+            return classNames;
+        }
+        for (File file : files) {
+            if (file.isDirectory() && versionFolderPattern.matcher(file.getName()).matches()) {
+                workingDir = file;
+                break;
+            }
+        }
+        if (workingDir == null) {
+            return classNames;
+        }
+        File classesDir = new File(workingDir, "dev/jorel/commandapi/nms");
+        File[] classFiles = classesDir.listFiles();
+        if (classFiles == null) {
+            return classNames;
+        }
+        for (File classFile : classFiles) {
+            if (!classFile.isDirectory()) {
+                classNames.add(classFile.getName().replace(".class", ""));
+            }
+        }
+        return classNames;
+    }
+
     public void clean(List<String> versions) {
         for (String version : versions) {
             File versionFolder = new File(version);
-            File bytecodeFile = new File(versionFolder, "bytecode_" + version + ".txt");
             File devFolder = new File(versionFolder, "dev");
             File metaFolder = new File(versionFolder, "META-INF");
-            if (bytecodeFile.exists()) {
-                bytecodeFile.delete();
-            }
             if (devFolder.exists()) {
                 deleteRecursively(devFolder);
             }
@@ -89,37 +127,63 @@ public class Main {
         }
     }
 
-    public void createBytecodeFile(List<String> versions) throws IOException, InterruptedException {
+    public void createBytecodeFiles(List<String> versions, List<String> classNames) throws IOException, InterruptedException {
         for (String version : versions) {
             Runtime runtime = Runtime.getRuntime();
-            System.out.println("Creating bytecode file for version " + version);
-            Process process = runtime.exec(new String[]{"javap", "-c", "dev/jorel/commandapi/nms/NMS_Common.class"}, null, new File(version));
-            try (
-                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                BufferedWriter writer = new BufferedWriter(new FileWriter(new File(version, "bytecode_" + version + ".txt")))
-            ) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    writer.write(line + "\n");
+            for (String className : classNames) {
+                String disassembledBytecodeFileName = getDisassembledBytecodeFileName.apply(version, className);
+                String methodBytecodeFileName = getMethodBytecodeFileName.apply(version, className);
+                File disassembledBytecodeFile = new File(version, disassembledBytecodeFileName);
+                File methodBytecodeFile = new File(version, methodBytecodeFileName);
+                if (disassembledBytecodeFile.exists()) {
+                    disassembledBytecodeFile.delete();
                 }
+                if (methodBytecodeFile.exists()) {
+                    methodBytecodeFile.delete();
+                }
+
+                Process disassembledBytecode = runtime.exec(new String[]{"javap", "-c", "dev/jorel/commandapi/nms/" + className + ".class"}, null, new File(version));
+                Process classMethods = runtime.exec(new String[]{"javap", "dev/jorel/commandapi/nms/" + className + ".class"}, null, new File(version));
+                try (
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(disassembledBytecode.getInputStream()));
+                    BufferedWriter writer = new BufferedWriter(new FileWriter(new File(version, disassembledBytecodeFileName)))
+                ) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        writer.write(line + "\n");
+                    }
+                }
+                try (
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(classMethods.getInputStream()));
+                    BufferedWriter writer = new BufferedWriter(new FileWriter(new File(version, methodBytecodeFileName)))
+                ) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        writer.write(line + "\n");
+                    }
+                }
+                disassembledBytecode.waitFor();
+                classMethods.waitFor();
+                System.out.println("Created bytecode files for version " + version + ", class " + className + ".class");
             }
-            process.waitFor();
-            System.out.println("Created bytecode file for version " + version);
         }
     }
 
-    public void loadBytecodeFile(List<String> versions) {
+    public void loadBytecodeFile(List<String> versions, List<String> classNames) {
         for (String version : versions) {
             File versionFolder = new File(version);
-            File bytecodeFile = new File(versionFolder, "bytecode_" + version + ".txt");
-            if (bytecodeFile.exists()) {
-                BytecodeFile bytecode = new BytecodeFile(version, bytecodeFile);
-                bytecodes.add(bytecode);
+            for (String className : classNames) {
+                File bytecodeFile = new File(versionFolder, getDisassembledBytecodeFileName.apply(version, className));
+                File methodFile = new File(versionFolder, getMethodBytecodeFileName.apply(version, className));
+                if (bytecodeFile.exists()) {
+                    BytecodeFile bytecode = new BytecodeFile(version, className, bytecodeFile, methodFile);
+                    bytecodes.add(bytecode);
+                }
             }
         }
     }
 
-    public void compareAllBytecodes() throws DiffException, IOException {
+    public void compareAllBytecodes(List<String> classNames) throws DiffException, IOException {
         System.out.println("Comparing all bytecodes...");
         for (BytecodeFile bytecode : bytecodes) {
             bytecode.writeAndDiff();
@@ -127,16 +191,22 @@ public class Main {
         System.out.println("Performing sanity check...");
         boolean areBytecodesEqual = true;
         BytecodeFile previousBytecode = null;
-        for (BytecodeFile bytecode : bytecodes) {
-            if (previousBytecode == null) {
+        for (String className : classNames) {
+            for (BytecodeFile bytecode : bytecodes) {
+                if (!bytecode.getClassName().equals(className)) {
+                    continue;
+                }
+                if (previousBytecode == null) {
+                    previousBytecode = bytecode;
+                    continue;
+                }
+                areBytecodesEqual &= previousBytecode.equals(bytecode);
                 previousBytecode = bytecode;
-                continue;
             }
-            areBytecodesEqual &= previousBytecode.equals(bytecode);
-            previousBytecode = bytecode;
-        }
-        if (!areBytecodesEqual) {
-            throw new DiffException("Bytecodes differ somewhere! The built-in checks did not catch that. Mappings issue will arise.", false);
+            previousBytecode = null;
+            if (!areBytecodesEqual) {
+                throw new DiffException("Bytecodes differ somewhere! The built-in checks did not catch that. Mappings issue will arise.", false);
+            }
         }
         System.out.println("All bytecodes are identical! No mapping issues will arise!");
     }
@@ -163,7 +233,7 @@ public class Main {
             return null;
         }
         for (File file : folder.listFiles()) {
-            if (pattern.matcher(file.getName()).matches()) {
+            if (commandAPIJarNamePattern.matcher(file.getName()).matches()) {
                 return file.getName();
             }
         }
