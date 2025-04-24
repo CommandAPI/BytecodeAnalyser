@@ -35,6 +35,7 @@ public class Main {
         main.clean(versions);
         main.unzipMatchingJar(versions);
         List<String> classNames = main.collectClassNames();
+        Collections.sort(classNames);
         System.out.println(classNames);
         main.createBytecodeFiles(versions, classNames);
         main.loadBytecodeFile(versions, classNames);
@@ -42,20 +43,23 @@ public class Main {
             main.compareAllBytecodes(classNames);
         } catch (DiffException e) {
             if (e.methodKnown) {
-                System.out.println("There is a mappings issue with " + e.getMessage().trim());
+                System.out.println("There are mapping issues. See below:");
                 for (BytecodeFile file : main.bytecodes) {
                     if (!file.getClassName().equals(e.className)) {
                         continue;
                     }
                     System.out.println("Bytecode " + file.getVersion() + ":");
-                    System.out.println(e.getMessage().trim());
-                    file.methodImpls().get(e.getMessage()).forEach(impl -> {
-                        System.out.println("\t" + impl.trim());
-                    });
+                    for (String mappingIssue : e.methods) {
+                        System.out.println(mappingIssue.trim());
+                        file.methodImpls().get(mappingIssue).forEach(impl -> {
+                            System.out.println("\t" + impl.trim());
+                        });
+                        System.out.println();
+                    }
                     System.out.println();
                 }
             } else {
-                System.out.println(e.getMessage());
+                System.out.println("Bytecodes differ somewhere! The built-in checks did not catch that. Mappings issue will arise.");
             }
             // We caught an exception, but we want the CommandAPI's GitHub Action build to fail
             System.exit(1);
@@ -228,7 +232,7 @@ public class Main {
             }
             previousBytecode = null;
             if (!areBytecodesEqual) {
-                throw new DiffException("Bytecodes differ somewhere! The built-in checks did not catch that. Mappings issue will arise.", false);
+                throw new DiffException(null, false);
             }
         }
         System.out.println("All bytecodes are identical! No mapping issues will arise!");

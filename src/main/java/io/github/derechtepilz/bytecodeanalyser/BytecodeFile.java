@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
 
 public class BytecodeFile {
 
-    private static final Map<String, List<String>> DIFF = new HashMap<>();
+    private static final Map<String, Map<String, List<String>>> DIFF = new HashMap<>();
 
     private final String version;
     private final String className;
@@ -79,41 +79,24 @@ public class BytecodeFile {
     }
 
     private void writeInitialBytecodeFile() {
-        List<String> methodImplementation = new ArrayList<>();
+        Map<String, List<String>> methodImplementation = new HashMap<>();
         for (String methodSignature : methods) {
-            methodImplementation.add(methodSignature);
-            methodImplementation.addAll(methodImpls.get(methodSignature));
+            methodImplementation.put(methodSignature, methodImpls.get(methodSignature));
         }
         DIFF.put(className, methodImplementation);
     }
 
     private void compareAndWriteIfEqual() throws DiffException {
-        List<String> methodsDiff = collectToComparable();
-        for (int i = 0; i < methodsDiff.size(); i++) {
-            if (!methodsDiff.get(i).equals(DIFF.get(className).get(i))) {
-                if (methods.contains(methodsDiff.get(i))) {
-                    // We've just compared a method that doesn't match
-                    throw new DiffException(className, methodsDiff.get(i));
-                }
-                // We didn't compare a method, but we want to know the method to be able to
-                // know which method to implement version-specific
-                for (Map.Entry<String, List<String>> entry : methodImpls.entrySet()) {
-                    if (entry.getValue().contains(methodsDiff.get(i))) {
-                        throw new DiffException(className, entry.getKey());
-                    }
-                }
+        List<String> errors = new ArrayList<>();
+        for (String method : methods) {
+            if (!methodImpls.get(method).equals(DIFF.get(className).get(method))) {
+                errors.add(method);
             }
-            DIFF.get(className).set(i, methodsDiff.get(i));
+            DIFF.get(className).put(method, methodImpls.get(method));
         }
-    }
-
-    private List<String> collectToComparable() {
-        List<String> methods = new ArrayList<>();
-        for (String methodSignature : this.methods) {
-            methods.add(methodSignature);
-            methods.addAll(methodImpls.get(methodSignature));
+        if (!errors.isEmpty()) {
+            throw new DiffException(className, errors);
         }
-        return methods;
     }
 
     private void readMethodImpls() {
