@@ -2,7 +2,7 @@
 
 BytecodeAnalyser is a tool made for use in the [CommandAPI's](https://github.com/CommandAPI/CommandAPI) GitHub Actions to compare the bytecode
 to make sure that the [commandapi-bukkit-nms-common](https://github.com/CommandAPI/CommandAPI/tree/5a3434a90f0608be7d9d009c490fd8ffaf5a3a0c/commandapi-platforms/commandapi-bukkit/commandapi-bukkit-nms/commandapi-bukkit-nms-common) module
-is compatible with all version the CommandAPI supports.
+is compatible with all versions the CommandAPI supports.
 
 ## Running BytecodeAnalyser locally
 
